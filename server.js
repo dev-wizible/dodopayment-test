@@ -307,11 +307,24 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
           updated_at: new Date(),
         });
 
-        // First try to match by session_id (for new subscriptions)
-        if (event.data.session_id) {
-          updateQuery = updateQuery.eq("session_id", event.data.session_id);
+        // Try multiple ways to find the user
+        const sessionId =
+          event.data.checkout_session_id || event.data.session_id;
+        const customerEmail = event.data.customer?.email;
+
+        console.log("🔍 Trying to find user by session_id:", sessionId);
+        console.log("🔍 Trying to find user by email:", customerEmail);
+
+        // Try email first (most reliable)
+        if (customerEmail) {
+          console.log("🎯 Matching by email:", customerEmail);
+          updateQuery = updateQuery.eq("email", customerEmail);
+        } else if (sessionId) {
+          console.log("🎯 Matching by session_id:", sessionId);
+          updateQuery = updateQuery.eq("session_id", sessionId);
         } else {
-          // Fallback to subscription_id (for renewals)
+          // Last resort: try subscription_id (for renewals)
+          console.log("🎯 Matching by subscription_id:", subscriptionId);
           updateQuery = updateQuery.eq("subscription_id", subscriptionId);
         }
 
@@ -326,6 +339,16 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
           console.log(
             "⚠️ No user found to update for subscription:",
             subscriptionId
+          );
+
+          // Debug: Let's see what users exist
+          const { data: allUsers } = await supabase
+            .from("users")
+            .select("user_id, email, session_id, subscription_id")
+            .limit(5);
+          console.log(
+            "🔍 Available users in database:",
+            JSON.stringify(allUsers, null, 2)
           );
         }
         break;
@@ -375,12 +398,23 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
             "subscription_id",
             subscriptionId
           );
-        } else if (event.data.session_id) {
-          // Fallback to session_id for new subscriptions
-          paymentUpdateQuery = paymentUpdateQuery.eq(
-            "session_id",
-            event.data.session_id
-          );
+        } else {
+          // Try multiple fallback methods to find the user
+          const sessionId =
+            event.data.checkout_session_id || event.data.session_id;
+          const customerEmail = event.data.customer?.email;
+
+          console.log("🔍 Trying to find user by session_id:", sessionId);
+          console.log("🔍 Trying to find user by email:", customerEmail);
+
+          if (sessionId) {
+            paymentUpdateQuery = paymentUpdateQuery.eq("session_id", sessionId);
+          } else if (customerEmail) {
+            paymentUpdateQuery = paymentUpdateQuery.eq("email", customerEmail);
+          } else {
+            console.log("❌ No way to identify user - skipping payment update");
+            break;
+          }
         }
 
         const { error: paymentError, data: updatedPaymentUsers } =
