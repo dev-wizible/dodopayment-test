@@ -260,7 +260,8 @@
     </div>
 
     <script>
-      const API_URL = "http://localhost:3001/api";
+      // Use current domain for API calls (works for both local and production)
+      const API_URL = `${window.location.origin}/api`;
 
       // Check user status on page load
       window.onload = () => {
