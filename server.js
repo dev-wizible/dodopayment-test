@@ -398,8 +398,10 @@ app.get("/success", async (req, res) => {
   }
 
   // Redirect to success page
+  const baseUrl =
+    process.env.FRONTEND_URL || "https://dodopayment-test.onrender.com";
   res.redirect(
-    `http://localhost:3001/success.html?subscription_id=${subscription_id}&status=${status}`
+    `${baseUrl}/success.html?subscription_id=${subscription_id}&status=${status}`
   );
 });
 

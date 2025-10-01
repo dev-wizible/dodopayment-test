@@ -50,14 +50,14 @@ A professional subscription management system built with Node.js, Express, and D
 
 ## 🔧 Environment Variables
 
-| Variable                       | Description                  | Example                        |
-| ------------------------------ | ---------------------------- | ------------------------------ |
-| `SUPABASE_URL`                 | Your Supabase project URL    | `https://xxx.supabase.co`      |
-| `SUPABASE_ANON_KEY`            | Supabase anonymous key       | `eyJhbGciOiJIUzI1NiI...`       |
-| `DODO_API_KEY`                 | DodoPayments API key         | `sk_test_...` or `sk_live_...` |
-| `DODO_BASE_URL`                | DodoPayments API base URL    | `https://api.dodopayments.com` |
-| `DODO_SUBSCRIPTION_PRODUCT_ID` | Your subscription product ID | `prod_...`                     |
-| `FRONTEND_URL`                 | Your deployed app URL        | `https://yourapp.onrender.com` |
+| Variable                       | Description                  | Example                                 |
+| ------------------------------ | ---------------------------- | --------------------------------------- |
+| `SUPABASE_URL`                 | Your Supabase project URL    | `https://xxx.supabase.co`               |
+| `SUPABASE_ANON_KEY`            | Supabase anonymous key       | `eyJhbGciOiJIUzI1NiI...`                |
+| `DODO_API_KEY`                 | DodoPayments API key         | `sk_test_...` or `sk_live_...`          |
+| `DODO_BASE_URL`                | DodoPayments API base URL    | `https://api.dodopayments.com`          |
+| `DODO_SUBSCRIPTION_PRODUCT_ID` | Your subscription product ID | `prod_...`                              |
+| `FRONTEND_URL`                 | Your deployed app URL        | `https://dodopayment-test.onrender.com` |
 
 ## 📋 API Endpoints
 
