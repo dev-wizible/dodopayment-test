@@ -281,6 +281,9 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
       event.data?.subscription_id
     );
 
+    // Debug: Log the full webhook data
+    console.log("🔍 Webhook data:", JSON.stringify(event.data, null, 2));
+
     const subscriptionId = event.data?.subscription_id;
 
     if (!subscriptionId) {
@@ -291,21 +294,39 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
     switch (event.type) {
       case "subscription.created":
       case "subscription.active":
-        console.log("✅ Activating subscription:", subscriptionId);
-        const { error: activateError } = await supabase
-          .from("users")
-          .update({
-            subscription_id: subscriptionId,
-            is_premium: true,
-            status: "active",
-            next_billing_date: event.data.next_billing_date,
-            cancel_at_billing_date: false,
-            updated_at: new Date(),
-          })
-          .eq("session_id", event.data.session_id);
+      case "subscription.renewed":
+        console.log("✅ Activating/Renewing subscription:", subscriptionId);
+
+        // Try to find user by session_id first, then by subscription_id
+        let updateQuery = supabase.from("users").update({
+          subscription_id: subscriptionId,
+          is_premium: true,
+          status: "active",
+          next_billing_date: event.data.next_billing_date,
+          cancel_at_billing_date: false,
+          updated_at: new Date(),
+        });
+
+        // First try to match by session_id (for new subscriptions)
+        if (event.data.session_id) {
+          updateQuery = updateQuery.eq("session_id", event.data.session_id);
+        } else {
+          // Fallback to subscription_id (for renewals)
+          updateQuery = updateQuery.eq("subscription_id", subscriptionId);
+        }
+
+        const { error: activateError, data: updatedUsers } =
+          await updateQuery.select();
 
         if (activateError) {
           console.error("❌ Failed to activate subscription:", activateError);
+        } else if (updatedUsers && updatedUsers.length > 0) {
+          console.log("✅ Successfully updated user:", updatedUsers[0].user_id);
+        } else {
+          console.log(
+            "⚠️ No user found to update for subscription:",
+            subscriptionId
+          );
         }
         break;
 
@@ -331,18 +352,52 @@ app.post("/api/webhooks/dodopayments", async (req, res) => {
 
       case "payment.succeeded":
         console.log("💳 Payment succeeded for subscription:", subscriptionId);
-        const { error: paymentError } = await supabase
+
+        // Try to find user by subscription_id first, then by session_id
+        let paymentUpdateQuery = supabase.from("users").update({
+          subscription_id: subscriptionId, // Ensure subscription_id is set
+          is_premium: true,
+          status: "active",
+          next_billing_date: event.data.next_billing_date,
+          updated_at: new Date(),
+        });
+
+        // Try to match by subscription_id first
+        const { data: existingUser } = await supabase
           .from("users")
-          .update({
-            is_premium: true,
-            status: "active",
-            next_billing_date: event.data.next_billing_date,
-            updated_at: new Date(),
-          })
-          .eq("subscription_id", subscriptionId);
+          .select("*")
+          .eq("subscription_id", subscriptionId)
+          .single();
+
+        if (existingUser) {
+          // Update existing user with subscription_id
+          paymentUpdateQuery = paymentUpdateQuery.eq(
+            "subscription_id",
+            subscriptionId
+          );
+        } else if (event.data.session_id) {
+          // Fallback to session_id for new subscriptions
+          paymentUpdateQuery = paymentUpdateQuery.eq(
+            "session_id",
+            event.data.session_id
+          );
+        }
+
+        const { error: paymentError, data: updatedPaymentUsers } =
+          await paymentUpdateQuery.select();
 
         if (paymentError) {
           console.error("❌ Failed to update payment success:", paymentError);
+        } else if (updatedPaymentUsers && updatedPaymentUsers.length > 0) {
+          console.log(
+            "✅ Successfully updated payment for user:",
+            updatedPaymentUsers[0].user_id
+          );
+        } else {
+          console.log(
+            "⚠️ No user found to update payment for subscription:",
+            subscriptionId
+          );
         }
         break;
 
