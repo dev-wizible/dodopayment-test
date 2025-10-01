@@ -1,0 +1,30 @@
+{
+  "name": "subscription-creator",
+  "version": "1.0.0",
+  "description": "DodoPayments subscription creator - generates real payment links",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "echo 'No build step required'"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.58.0",
+    "cors": "^2.8.5",
+    "dodopayments": "2.0.2",
+    "dotenv": "16.5.0",
+    "express": "^5.1.0"
+  },
+  "keywords": [
+    "dodopayments",
+    "subscription",
+    "payment-links",
+    "saas"
+  ],
+  "author": "Knugget Team",
+  "license": "MIT"
+}
