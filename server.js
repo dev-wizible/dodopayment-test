@@ -101,7 +101,9 @@ app.post("/api/create-subscription", async (req, res) => {
           },
         ],
         customer: { name, email },
-        return_url: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/success`,
+        return_url: `${
+          process.env.FRONTEND_URL || "http://localhost:3001"
+        }/success`,
       }),
     });
 
@@ -158,10 +160,10 @@ app.get("/api/user/:userId/status", async (req, res) => {
       // Subscription expired, update to free
       await supabase
         .from("users")
-        .update({ 
-          is_premium: false, 
+        .update({
+          is_premium: false,
           status: "expired",
-          updated_at: new Date()
+          updated_at: new Date(),
         })
         .eq("user_id", userId);
 
@@ -186,10 +188,10 @@ app.get("/api/user/:userId/status", async (req, res) => {
   }
 });
 
-// Cancel subscription
-app.post("/api/cancel-subscription", async (req, res) => {
+// Request cancellation (sends email to admin)
+app.post("/api/request-cancellation", async (req, res) => {
   try {
-    const { userId, subscriptionId } = req.body;
+    const { userId, subscriptionId, email, name } = req.body;
 
     if (!userId || !subscriptionId) {
       return res.status(400).json({
@@ -203,205 +205,94 @@ app.post("/api/cancel-subscription", async (req, res) => {
       .from("users")
       .select("*")
       .eq("user_id", userId)
-      .eq("subscription_id", subscriptionId)
       .single();
 
     if (userError || !user) {
       return res.status(404).json({
         success: false,
-        error: "Subscription not found or does not belong to user",
+        error: "User not found",
       });
     }
 
-    // Cancel in DodoPayments
-    const response = await fetch(
-      `${DODO_BASE_URL}/subscriptions/${subscriptionId}`,
-      {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${DODO_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          cancel_at_next_billing_date: true,
-        }),
-      }
-    );
+    // Mark as cancellation requested in database
+    await supabase
+      .from("users")
+      .update({
+        status: "cancellation_requested",
+        updated_at: new Date(),
+      })
+      .eq("user_id", userId);
 
-    const data = await response.json();
+    // TODO: Send email to admin (you can integrate with SendGrid, Nodemailer, etc.)
+    console.log(`📧 CANCELLATION REQUEST:
+    User: ${name} (${email})
+    User ID: ${userId}
+    Subscription ID: ${subscriptionId}
+    
+    ACTION REQUIRED: Please cancel this subscription in DodoPayments dashboard.`);
 
-    if (response.ok) {
-      // Update Supabase
-      await supabase
-        .from("users")
-        .update({
-          cancel_at_billing_date: true,
-          status: "cancelling",
-          updated_at: new Date(),
-        })
-        .eq("user_id", userId);
-
-      res.json({
-        success: true,
-        message: `Subscription will cancel at billing period end (${new Date(
-          user.next_billing_date
-        ).toLocaleDateString()})`,
-        next_billing_date: user.next_billing_date,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: data.message || "Failed to cancel subscription",
-      });
-    }
+    res.json({
+      success: true,
+      message:
+        "Cancellation request submitted. You will receive an email confirmation and keep premium access until your next billing date.",
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-// Webhook - FIXED VERSION
+// Simple webhook - just sync DodoPayments status
 app.post("/api/webhooks/dodopayments", async (req, res) => {
   try {
     const event = req.body;
-    
-    // Log full webhook for debugging
-    console.log("=== WEBHOOK RECEIVED ===");
-    console.log("Event type:", event.type);
-    console.log("Subscription ID:", event.data?.subscription_id);
-    console.log("Customer email:", event.data?.customer?.email);
-    console.log("Full data:", JSON.stringify(event.data, null, 2));
-    console.log("========================");
+    console.log("Webhook:", event.type, event.data?.subscription_id);
 
     const subscriptionId = event.data?.subscription_id;
     const customerEmail = event.data?.customer?.email;
+    const dodoStatus = event.data?.status; // DodoPayments official status
 
-    if (!subscriptionId) {
-      console.log("Warning: Webhook missing subscription_id");
+    if (!subscriptionId || !customerEmail) {
       return res.status(200).json({ received: true });
     }
 
-    switch (event.type) {
-      case "subscription.created":
-      case "subscription.active":
-      case "subscription.renewed":
-        console.log("Activating subscription:", subscriptionId);
-        
-        if (!customerEmail) {
-          console.error("No customer email in webhook");
-          break;
-        }
+    // Simple logic: Use DodoPayments status directly
+    let isPremium = false;
+    let dbStatus = "free";
 
-        const { data: activatedUser, error: activateError } = await supabase
-          .from("users")
-          .update({
-            subscription_id: subscriptionId,
-            is_premium: true,
-            status: "active",
-            next_billing_date: event.data.next_billing_date,
-            cancel_at_billing_date: false,
-            updated_at: new Date(),
-          })
-          .eq("email", customerEmail)
-          .select();
-
-        if (activateError) {
-          console.error("Failed to activate subscription:", activateError);
-        } else if (activatedUser && activatedUser.length > 0) {
-          console.log("Successfully activated for user:", activatedUser[0].user_id);
-        } else {
-          console.error("No user found with email:", customerEmail);
-          
-          // Debug: Show what users exist
-          const { data: allUsers } = await supabase
-            .from("users")
-            .select("user_id, email")
-            .limit(5);
-          console.log("Available users:", allUsers);
-        }
+    switch (dodoStatus) {
+      case "active":
+        isPremium = true;
+        dbStatus = "active";
         break;
-
-      case "subscription.cancelled":
-        console.log("Processing cancellation:", subscriptionId);
-        
-        const now = new Date();
+      case "cancelled":
+        // Check if still in grace period
         const nextBilling = new Date(event.data.next_billing_date);
-
-        const { data: cancelledUser, error: cancelError } = await supabase
-          .from("users")
-          .update({
-            is_premium: nextBilling > now,
-            status: nextBilling > now ? "cancelled" : "expired",
-            cancel_at_billing_date: nextBilling > now,
-            updated_at: new Date(),
-          })
-          .eq("subscription_id", subscriptionId)
-          .select();
-
-        if (cancelError) {
-          console.error("Failed to process cancellation:", cancelError);
-        } else if (cancelledUser && cancelledUser.length > 0) {
-          console.log("Cancelled for user:", cancelledUser[0].user_id);
-        }
+        const now = new Date();
+        isPremium = nextBilling > now;
+        dbStatus = isPremium ? "cancelling" : "expired";
         break;
-
-      case "payment.succeeded":
-        console.log("Payment succeeded:", subscriptionId);
-        
-        if (!customerEmail) {
-          console.error("No customer email in payment webhook");
-          break;
-        }
-
-        const { data: paidUser, error: paymentError } = await supabase
-          .from("users")
-          .update({
-            subscription_id: subscriptionId,
-            is_premium: true,
-            status: "active",
-            next_billing_date: event.data.next_billing_date,
-            updated_at: new Date(),
-          })
-          .eq("email", customerEmail)
-          .select();
-
-        if (paymentError) {
-          console.error("Failed to process payment:", paymentError);
-        } else if (paidUser && paidUser.length > 0) {
-          console.log("Payment processed for user:", paidUser[0].user_id);
-        } else {
-          console.error("No user found for payment with email:", customerEmail);
-        }
+      case "expired":
+      case "paused":
+        isPremium = false;
+        dbStatus = "expired";
         break;
-
-      case "payment.failed":
-        console.log("Payment failed:", subscriptionId);
-        
-        await supabase
-          .from("users")
-          .update({
-            status: "payment_failed",
-            updated_at: new Date(),
-          })
-          .eq("subscription_id", subscriptionId);
-        break;
-
-      case "subscription.expired":
-        console.log("Subscription expired:", subscriptionId);
-        
-        await supabase
-          .from("users")
-          .update({
-            is_premium: false,
-            status: "expired",
-            cancel_at_billing_date: false,
-            updated_at: new Date(),
-          })
-          .eq("subscription_id", subscriptionId);
-        break;
-
-      default:
-        console.log("Unhandled webhook event:", event.type);
     }
+
+    console.log(
+      `Updating user: ${customerEmail} -> ${dbStatus} (premium: ${isPremium})`
+    );
+
+    // Update database with DodoPayments status
+    await supabase
+      .from("users")
+      .update({
+        subscription_id: subscriptionId,
+        is_premium: isPremium,
+        status: dbStatus,
+        next_billing_date: event.data.next_billing_date,
+        cancel_at_billing_date: dodoStatus === "cancelled",
+        updated_at: new Date(),
+      })
+      .eq("email", customerEmail);
 
     res.status(200).json({ received: true });
   } catch (error) {
@@ -464,5 +355,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`Frontend URL: ${process.env.FRONTEND_URL || `http://localhost:${PORT}`}`);
+  console.log(
+    `Frontend URL: ${process.env.FRONTEND_URL || `http://localhost:${PORT}`}`
+  );
 });

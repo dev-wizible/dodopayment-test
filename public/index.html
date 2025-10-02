@@ -355,6 +355,12 @@
             title.textContent = "❌ Subscription Expired";
             message.textContent =
               "Your premium access has ended. Upgrade to continue using premium features.";
+          } else if (status.status === "cancellation_requested") {
+            // Cancellation requested
+            banner.classList.add("cancelling");
+            title.textContent = "📧 Cancellation Requested";
+            message.textContent =
+              "Your cancellation request has been submitted. You'll keep premium access until your next billing date.";
           } else {
             // Free
             banner.classList.add("free");
@@ -434,6 +440,8 @@
       async function cancelSubscription() {
         const userId = document.getElementById("userId").value;
         const subscriptionId = document.getElementById("subscriptionId").value;
+        const email = document.getElementById("email").value;
+        const name = document.getElementById("name").value;
 
         if (!userId || !subscriptionId) {
           alert("Please enter user ID and subscription ID");
@@ -441,21 +449,27 @@
         }
 
         const confirmCancel = confirm(
-          "Cancel subscription? You will keep premium until billing period ends."
+          "Request cancellation? An email will be sent to support and you'll keep premium access until your next billing date."
         );
         if (!confirmCancel) return;
 
         showLoading();
 
         try {
-          const res = await fetch(`${API_URL}/cancel-subscription`, {
+          const res = await fetch(`${API_URL}/request-cancellation`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, subscriptionId }),
+            body: JSON.stringify({ userId, subscriptionId, email, name }),
           });
 
           const data = await res.json();
           showResult(data);
+
+          if (data.success) {
+            alert(
+              "Cancellation request submitted! You will keep premium access until your next billing date."
+            );
+          }
 
           // Refresh status
           setTimeout(() => checkUserStatus(), 1000);
