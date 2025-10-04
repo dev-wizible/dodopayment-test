@@ -329,7 +329,7 @@
       function showResult(data) {
         hideLoading();
         document.getElementById("result").classList.add("show");
-        
+
         // Show the original subscription response
         document.getElementById("resultContent").textContent = JSON.stringify(
           data,
@@ -352,7 +352,8 @@
         if (!data.subscription) {
           banner.classList.add("free");
           title.textContent = "🆓 Free Plan";
-          message.textContent = "Upgrade to unlock premium features and advanced functionality.";
+          message.textContent =
+            "Upgrade to unlock premium features and advanced functionality.";
           return;
         }
 
@@ -369,31 +370,40 @@
           cancelInfo.classList.add("show");
 
           const amount = sub.recurring_pre_tax_amount / 100;
-          message.textContent = `Next billing: ${nextBilling.toLocaleDateString()} • ${amount} ${sub.currency}`;
+          message.textContent = `Next billing: ${nextBilling.toLocaleDateString()} • ${amount} ${
+            sub.currency
+          }`;
         }
         // Scenario 2: Cancelling (grace period)
         else if (dodoStatus === "active" && cancelAtNext) {
           const isPremium = nextBilling > now;
-          
+
           if (isPremium) {
             banner.classList.add("cancelling");
             title.textContent = "⚠️ Subscription Cancelling";
 
-            const daysLeft = Math.ceil((nextBilling - now) / (1000 * 60 * 60 * 24));
-            message.textContent = daysLeft > 0 
-              ? `Premium access ends in ${daysLeft} day${daysLeft !== 1 ? "s" : ""} (${nextBilling.toLocaleDateString()})`
-              : "Premium access ends today";
+            const daysLeft = Math.ceil(
+              (nextBilling - now) / (1000 * 60 * 60 * 24)
+            );
+            message.textContent =
+              daysLeft > 0
+                ? `Premium access ends in ${daysLeft} day${
+                    daysLeft !== 1 ? "s" : ""
+                  } (${nextBilling.toLocaleDateString()})`
+                : "Premium access ends today";
           } else {
             banner.classList.add("expired");
             title.textContent = "❌ Subscription Expired";
-            message.textContent = "Your premium access has ended. Upgrade to continue.";
+            message.textContent =
+              "Your premium access has ended. Upgrade to continue.";
           }
         }
         // Scenario 3: Cancelled
         else if (dodoStatus === "cancelled") {
           banner.classList.add("expired");
           title.textContent = "❌ Subscription Cancelled";
-          message.textContent = "Your subscription has been cancelled. Upgrade to restore premium access.";
+          message.textContent =
+            "Your subscription has been cancelled. Upgrade to restore premium access.";
         }
         // Other statuses
         else {
@@ -405,7 +415,8 @@
         // Show sync indicator
         if (data.synced) {
           const syncBadge = document.createElement("div");
-          syncBadge.style.cssText = "margin-top: 8px; font-size: 12px; opacity: 0.8;";
+          syncBadge.style.cssText =
+            "margin-top: 8px; font-size: 12px; opacity: 0.8;";
           syncBadge.textContent = "✅ Just synced with DodoPayments";
           message.appendChild(syncBadge);
         }
@@ -437,9 +448,10 @@
         const userId = document.getElementById("userId").value;
         const email = document.getElementById("email").value;
         const name = document.getElementById("name").value;
+        const productId = document.getElementById("productId").value;
 
-        if (!userId || !email || !name) {
-          alert("Please fill all fields");
+        if (!userId || !email || !name || !productId) {
+          alert("Please fill all fields including Product ID");
           return;
         }
 
@@ -449,7 +461,7 @@
           const res = await fetch(`${API_URL}/create-subscription`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, email, name }),
+            body: JSON.stringify({ userId, email, name, productId }),
           });
 
           const data = await res.json();
