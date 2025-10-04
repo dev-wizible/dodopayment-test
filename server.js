@@ -165,10 +165,20 @@ app.post("/api/create-subscription", async (req, res) => {
   try {
     const { userId, email, name, productId } = req.body;
 
-    if (!productId) {
+    console.log("Received request:", { userId, email, name, productId });
+
+    if (!userId || !email || !name) {
+      return res.status(400).json({
+        success: false,
+        error: "User ID, email, and name are required",
+      });
+    }
+
+    if (!productId || productId.trim() === "") {
       return res.status(400).json({
         success: false,
         error: "Product ID is required",
+        received: req.body,
       });
     }
 
@@ -182,7 +192,7 @@ app.post("/api/create-subscription", async (req, res) => {
       body: JSON.stringify({
         product_cart: [
           {
-            product_id: productId,
+            product_id: productId.trim(),
             quantity: 1,
           },
         ],
@@ -202,7 +212,7 @@ app.post("/api/create-subscription", async (req, res) => {
         email,
         name,
         session_id: data.session_id,
-        product_id: productId,
+        product_id: productId.trim(),
         created_at: new Date(),
         updated_at: new Date(),
       });
