@@ -163,7 +163,14 @@ setTimeout(checkBillingDatePassed, 5000);
 // Create subscription
 app.post("/api/create-subscription", async (req, res) => {
   try {
-    const { userId, email, name } = req.body;
+    const { userId, email, name, productId } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        error: "Product ID is required",
+      });
+    }
 
     // Create checkout session
     const response = await fetch(`${DODO_BASE_URL}/checkouts`, {
@@ -175,7 +182,7 @@ app.post("/api/create-subscription", async (req, res) => {
       body: JSON.stringify({
         product_cart: [
           {
-            product_id: process.env.DODO_SUBSCRIPTION_PRODUCT_ID,
+            product_id: productId,
             quantity: 1,
           },
         ],
@@ -195,6 +202,7 @@ app.post("/api/create-subscription", async (req, res) => {
         email,
         name,
         session_id: data.session_id,
+        product_id: productId,
         created_at: new Date(),
         updated_at: new Date(),
       });
