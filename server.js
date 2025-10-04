@@ -165,7 +165,7 @@ app.post("/api/create-subscription", async (req, res) => {
   try {
     const { userId, email, name, productId } = req.body;
 
-    console.log("Received request:", { userId, email, name, productId });
+    console.log("📝 Received request:", { userId, email, name, productId });
 
     if (!userId || !email || !name) {
       return res.status(400).json({
@@ -181,6 +181,8 @@ app.post("/api/create-subscription", async (req, res) => {
         received: req.body,
       });
     }
+
+    console.log("🚀 Creating checkout with DodoPayments...");
 
     // Create checkout session
     const response = await fetch(`${DODO_BASE_URL}/checkouts`, {
@@ -205,7 +207,12 @@ app.post("/api/create-subscription", async (req, res) => {
 
     const data = await response.json();
 
+    console.log("📊 DodoPayments response status:", response.status);
+    console.log("📊 DodoPayments response data:", JSON.stringify(data, null, 2));
+
     if (response.ok) {
+      console.log("✅ Checkout created successfully");
+
       // Save to Supabase
       await supabase.from("users").upsert({
         user_id: userId,
@@ -222,9 +229,15 @@ app.post("/api/create-subscription", async (req, res) => {
         checkout_url: data.checkout_url,
       });
     } else {
-      res.status(400).json({ success: false, error: data });
+      console.error("❌ DodoPayments error:", data);
+      res.status(400).json({ 
+        success: false, 
+        error: data,
+        message: "DodoPayments API error - check server logs for details"
+      });
     }
   } catch (error) {
+    console.error("💥 Server error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
