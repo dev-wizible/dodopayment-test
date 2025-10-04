@@ -76,6 +76,36 @@
         opacity: 0.9;
       }
 
+      .cancel-info {
+        background: #fff3cd;
+        border: 2px solid #ffc107;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 30px;
+        display: none;
+      }
+
+      .cancel-info.show {
+        display: block;
+      }
+
+      .cancel-info h3 {
+        color: #856404;
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
+
+      .cancel-info p {
+        color: #856404;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .cancel-info a {
+        color: #667eea;
+        font-weight: 600;
+      }
+
       /* Form */
       .form-group {
         margin-bottom: 20px;
@@ -141,15 +171,6 @@
         background: #1976d2;
       }
 
-      .btn-cancel {
-        background: #f44336;
-        color: white;
-      }
-
-      .btn-cancel:hover:not(:disabled) {
-        background: #d32f2f;
-      }
-
       .result {
         margin-top: 30px;
         padding: 20px;
@@ -210,6 +231,17 @@
         <div class="banner-message" id="bannerMessage"></div>
       </div>
 
+      <!-- Cancellation Info (shown for premium users) -->
+      <div class="cancel-info" id="cancelInfo">
+        <h3>Need to cancel your subscription?</h3>
+        <p>
+          Please send an email to
+          <a href="mailto:support@yourcompany.com">support@yourcompany.com</a>
+          with your User ID and Subscription ID. We'll process your cancellation
+          request and you'll keep premium access until your next billing date.
+        </p>
+      </div>
+
       <!-- User Input -->
       <div class="form-group">
         <label>User ID</label>
@@ -232,19 +264,17 @@
           type="text"
           id="subscriptionId"
           placeholder="Will be auto-filled"
+          readonly
         />
       </div>
 
       <!-- Buttons -->
       <div class="button-group">
         <button class="btn-status" onclick="checkUserStatus()">
-          Check My Status
+          🔄 Check My Status
         </button>
         <button class="btn-premium" onclick="createSubscription()">
-          Upgrade to Premium
-        </button>
-        <button class="btn-cancel" onclick="cancelSubscription()">
-          Cancel Subscription
+          ⭐ Upgrade to Premium
         </button>
       </div>
 
@@ -260,27 +290,21 @@
     </div>
 
     <script>
-      // Use current domain for API calls (works for both local and production)
       const API_URL = `${window.location.origin}/api`;
 
       // Check user status on page load
       window.onload = () => {
-        // Check for URL parameters
         const urlParams = new URLSearchParams(window.location.search);
         const subId = urlParams.get("subscriptionId");
         const action = urlParams.get("action");
 
-        // Auto-fill subscription ID if provided
         if (subId) {
           document.getElementById("subscriptionId").value = subId;
-
-          // Auto-check details if action is 'details'
           if (action === "details") {
             setTimeout(() => checkUserStatus(), 500);
           }
         }
 
-        // Always check status on load
         checkUserStatus();
       };
 
@@ -296,6 +320,8 @@
       function showResult(data) {
         hideLoading();
         document.getElementById("result").classList.add("show");
+        
+        // Show the original subscription response
         document.getElementById("resultContent").textContent = JSON.stringify(
           data,
           null,
@@ -303,71 +329,76 @@
         );
       }
 
-      function updateBanner(status) {
+      function updateBanner(data) {
         const banner = document.getElementById("premiumBanner");
         const title = document.getElementById("bannerTitle");
         const message = document.getElementById("bannerMessage");
+        const cancelInfo = document.getElementById("cancelInfo");
 
         banner.classList.remove("free", "premium", "cancelling", "expired");
         banner.classList.add("show");
+        cancelInfo.classList.remove("show");
 
-        if (status.isPremium) {
-          if (status.cancelAtBillingDate) {
-            // Cancelling but still premium
+        // If no subscription
+        if (!data.subscription) {
+          banner.classList.add("free");
+          title.textContent = "🆓 Free Plan";
+          message.textContent = "Upgrade to unlock premium features and advanced functionality.";
+          return;
+        }
+
+        const sub = data.subscription;
+        const dodoStatus = sub.status;
+        const cancelAtNext = sub.cancel_at_next_billing_date;
+        const nextBilling = new Date(sub.next_billing_date);
+        const now = new Date();
+
+        // Scenario 1: Active subscription
+        if (dodoStatus === "active" && !cancelAtNext) {
+          banner.classList.add("premium");
+          title.textContent = `✓ Premium Active (${sub.currency})`;
+          cancelInfo.classList.add("show");
+
+          const amount = sub.recurring_pre_tax_amount / 100;
+          message.textContent = `Next billing: ${nextBilling.toLocaleDateString()} • ${amount} ${sub.currency}`;
+        }
+        // Scenario 2: Cancelling (grace period)
+        else if (dodoStatus === "active" && cancelAtNext) {
+          const isPremium = nextBilling > now;
+          
+          if (isPremium) {
             banner.classList.add("cancelling");
             title.textContent = "⚠️ Subscription Cancelling";
 
-            // Add countdown if billing date is available
-            if (status.nextBillingDate) {
-              const billingDate = new Date(status.nextBillingDate);
-              const now = new Date();
-              const daysLeft = Math.ceil(
-                (billingDate - now) / (1000 * 60 * 60 * 24)
-              );
-
-              if (daysLeft > 0) {
-                message.textContent = `Premium access ends in ${daysLeft} day${
-                  daysLeft !== 1 ? "s" : ""
-                } (${billingDate.toLocaleDateString()})`;
-              } else {
-                message.textContent = "Premium access ends today";
-              }
-            } else {
-              message.textContent = status.message;
-            }
+            const daysLeft = Math.ceil((nextBilling - now) / (1000 * 60 * 60 * 24));
+            message.textContent = daysLeft > 0 
+              ? `Premium access ends in ${daysLeft} day${daysLeft !== 1 ? "s" : ""} (${nextBilling.toLocaleDateString()})`
+              : "Premium access ends today";
           } else {
-            // Active premium
-            banner.classList.add("premium");
-            title.textContent = "✓ Premium Active";
-
-            // Show next billing date
-            if (status.nextBillingDate) {
-              const billingDate = new Date(status.nextBillingDate);
-              message.textContent = `Next billing: ${billingDate.toLocaleDateString()}`;
-            } else {
-              message.textContent = status.message;
-            }
-          }
-        } else {
-          if (status.status === "expired") {
-            // Expired
             banner.classList.add("expired");
             title.textContent = "❌ Subscription Expired";
-            message.textContent =
-              "Your premium access has ended. Upgrade to continue using premium features.";
-          } else if (status.status === "cancellation_requested") {
-            // Cancellation requested
-            banner.classList.add("cancelling");
-            title.textContent = "📧 Cancellation Requested";
-            message.textContent =
-              "Your cancellation request has been submitted. You'll keep premium access until your next billing date.";
-          } else {
-            // Free
-            banner.classList.add("free");
-            title.textContent = "🆓 Free Plan";
-            message.textContent =
-              "Upgrade to unlock premium features and advanced functionality.";
+            message.textContent = "Your premium access has ended. Upgrade to continue.";
           }
+        }
+        // Scenario 3: Cancelled
+        else if (dodoStatus === "cancelled") {
+          banner.classList.add("expired");
+          title.textContent = "❌ Subscription Cancelled";
+          message.textContent = "Your subscription has been cancelled. Upgrade to restore premium access.";
+        }
+        // Other statuses
+        else {
+          banner.classList.add("free");
+          title.textContent = `📊 Status: ${dodoStatus}`;
+          message.textContent = "Check your subscription details below.";
+        }
+
+        // Show sync indicator
+        if (data.synced) {
+          const syncBadge = document.createElement("div");
+          syncBadge.style.cssText = "margin-top: 8px; font-size: 12px; opacity: 0.8;";
+          syncBadge.textContent = "✅ Just synced with DodoPayments";
+          message.appendChild(syncBadge);
         }
       }
 
@@ -423,7 +454,6 @@
               window.open(data.checkout_url, "_blank");
             }
 
-            // Refresh status after 5 seconds
             setTimeout(() => {
               alert("Check your status after completing payment");
               checkUserStatus();
@@ -431,48 +461,6 @@
           } else {
             showResult(data);
           }
-        } catch (error) {
-          hideLoading();
-          alert("Error: " + error.message);
-        }
-      }
-
-      async function cancelSubscription() {
-        const userId = document.getElementById("userId").value;
-        const subscriptionId = document.getElementById("subscriptionId").value;
-        const email = document.getElementById("email").value;
-        const name = document.getElementById("name").value;
-
-        if (!userId || !subscriptionId) {
-          alert("Please enter user ID and subscription ID");
-          return;
-        }
-
-        const confirmCancel = confirm(
-          "Request cancellation? An email will be sent to support and you'll keep premium access until your next billing date."
-        );
-        if (!confirmCancel) return;
-
-        showLoading();
-
-        try {
-          const res = await fetch(`${API_URL}/request-cancellation`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, subscriptionId, email, name }),
-          });
-
-          const data = await res.json();
-          showResult(data);
-
-          if (data.success) {
-            alert(
-              "Cancellation request submitted! You will keep premium access until your next billing date."
-            );
-          }
-
-          // Refresh status
-          setTimeout(() => checkUserStatus(), 1000);
         } catch (error) {
           hideLoading();
           alert("Error: " + error.message);

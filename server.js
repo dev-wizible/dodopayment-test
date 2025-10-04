@@ -30,56 +30,135 @@ const supabase = createClient(
 const DODO_API_KEY = process.env.DODO_API_KEY;
 const DODO_BASE_URL = process.env.DODO_BASE_URL;
 
-// Automated subscription status checker
-async function checkExpiredSubscriptions() {
+// Helper: Fetch subscription from DodoPayments and update DB
+async function syncSubscriptionFromDodo(subscriptionId, email) {
   try {
-    console.log("Checking for expired subscriptions...");
+    console.log(`🔄 Syncing subscription ${subscriptionId} for ${email}`);
 
+    const response = await fetch(
+      `${DODO_BASE_URL}/subscriptions/${subscriptionId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${DODO_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.error("Failed to fetch from DodoPayments");
+      return null;
+    }
+
+    const subscription = await response.json();
+    const dodoStatus = subscription.status;
+    const cancelAtNext = subscription.cancel_at_next_billing_date;
+    const nextBilling = new Date(subscription.next_billing_date);
     const now = new Date();
 
-    // Find subscriptions that should be expired
-    const { data: expiredUsers, error } = await supabase
+    // Determine user status based on DodoPayments response
+    let isPremium = false;
+    let dbStatus = "free";
+
+    // Scenario 1: Active subscription
+    if (dodoStatus === "active" && !cancelAtNext) {
+      isPremium = true;
+      dbStatus = "active";
+      console.log("✅ Status: ACTIVE - Full premium access");
+    }
+    // Scenario 2: Cancelling (grace period)
+    else if (dodoStatus === "active" && cancelAtNext) {
+      // Check if still in grace period
+      isPremium = nextBilling > now;
+      dbStatus = isPremium ? "cancelling" : "expired";
+      console.log(
+        `⚠️ Status: CANCELLING - Premium until ${nextBilling.toLocaleDateString()}`
+      );
+    }
+    // Scenario 3: Cancelled immediately
+    else if (dodoStatus === "cancelled") {
+      isPremium = false;
+      dbStatus = "expired";
+      console.log("❌ Status: CANCELLED - No premium access");
+    }
+    // Other statuses (pending, paused, etc.)
+    else {
+      isPremium = false;
+      dbStatus = dodoStatus || "free";
+      console.log(`📊 Status: ${dodoStatus.toUpperCase()}`);
+    }
+
+    console.log(`Final: ${email} → ${dbStatus} (premium: ${isPremium})`);
+
+    // Update database
+    const { data, error } = await supabase
       .from("users")
-      .select("*")
-      .eq("cancel_at_billing_date", true)
-      .eq("is_premium", true)
-      .lte("next_billing_date", now.toISOString());
+      .update({
+        subscription_id: subscriptionId,
+        is_premium: isPremium,
+        status: dbStatus,
+        next_billing_date: subscription.next_billing_date,
+        cancel_at_billing_date: cancelAtNext,
+        updated_at: new Date(),
+      })
+      .eq("email", email)
+      .select();
 
     if (error) {
-      console.error("Error fetching expired subscriptions:", error);
-      return;
+      console.error("Database update error:", error);
+      return null;
     }
 
-    if (expiredUsers && expiredUsers.length > 0) {
-      console.log(`Found ${expiredUsers.length} expired subscriptions`);
-
-      for (const user of expiredUsers) {
-        const { error: updateError } = await supabase
-          .from("users")
-          .update({
-            is_premium: false,
-            status: "expired",
-            updated_at: new Date(),
-          })
-          .eq("user_id", user.user_id);
-
-        if (updateError) {
-          console.error(`Failed to expire user ${user.user_id}:`, updateError);
-        } else {
-          console.log(`Expired subscription for user ${user.user_id}`);
-        }
-      }
-    } else {
-      console.log("No expired subscriptions found");
-    }
+    // Return both DB data and full DodoPayments response
+    return {
+      user: data[0],
+      dodoPaymentsResponse: subscription,
+    };
   } catch (error) {
-    console.error("Error in checkExpiredSubscriptions:", error);
+    console.error("Sync error:", error);
+    return null;
   }
 }
 
-// Run subscription checker every hour
-setInterval(checkExpiredSubscriptions, 60 * 60 * 1000);
-setTimeout(checkExpiredSubscriptions, 5000);
+// Auto-check subscriptions that passed billing date
+async function checkBillingDatePassed() {
+  try {
+    console.log("⏰ Checking for subscriptions past billing date...");
+
+    const now = new Date();
+
+    // Find users with billing date in the past
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("*")
+      .not("subscription_id", "is", null)
+      .lte("next_billing_date", now.toISOString());
+
+    if (error) {
+      console.error("Error fetching users:", error);
+      return;
+    }
+
+    if (users && users.length > 0) {
+      console.log(`Found ${users.length} subscriptions to check`);
+
+      for (const user of users) {
+        await syncSubscriptionFromDodo(user.subscription_id, user.email);
+        // Wait 500ms between requests to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } else {
+      console.log("No subscriptions need checking");
+    }
+  } catch (error) {
+    console.error("Error in checkBillingDatePassed:", error);
+  }
+}
+
+// Run billing date checker every 15 minutes
+setInterval(checkBillingDatePassed, 15 * 60 * 1000);
+// Run on startup after 5 seconds
+setTimeout(checkBillingDatePassed, 5000);
 
 // Create subscription
 app.post("/api/create-subscription", async (req, res) => {
@@ -132,7 +211,7 @@ app.post("/api/create-subscription", async (req, res) => {
   }
 });
 
-// Get user status
+// Get user status (with auto-sync if needed)
 app.get("/api/user/:userId/status", async (req, res) => {
   try {
     const { userId } = req.params;
@@ -146,111 +225,35 @@ app.get("/api/user/:userId/status", async (req, res) => {
 
     if (error || !user || !user.subscription_id) {
       return res.json({
-        isPremium: false,
-        status: "free",
+        subscription: null,
         message: "No active subscription",
       });
     }
 
-    // Check if subscription is still valid
+    // Check if billing date passed - if yes, sync from DodoPayments
     const now = new Date();
     const billingDate = new Date(user.next_billing_date);
 
-    if (user.cancel_at_billing_date && billingDate <= now) {
-      // Subscription expired, update to free
-      await supabase
-        .from("users")
-        .update({
-          is_premium: false,
-          status: "expired",
-          updated_at: new Date(),
-        })
-        .eq("user_id", userId);
+    if (billingDate <= now) {
+      console.log(`🔄 Billing date passed for ${user.email}, syncing...`);
+      const synced = await syncSubscriptionFromDodo(
+        user.subscription_id,
+        user.email
+      );
 
-      return res.json({
-        isPremium: false,
-        status: "expired",
-        message: "Subscription expired",
-      });
+      if (synced) {
+        // Return ORIGINAL DodoPayments response
+        return res.json({
+          subscription: synced.dodoPaymentsResponse,
+          synced: true,
+          message: "Subscription synced from DodoPayments",
+        });
+      }
     }
 
-    res.json({
-      isPremium: user.is_premium,
-      status: user.status,
-      message: user.cancel_at_billing_date
-        ? `Premium until ${billingDate.toLocaleDateString()}`
-        : `Next billing: ${billingDate.toLocaleDateString()}`,
-      nextBillingDate: user.next_billing_date,
-      cancelAtBillingDate: user.cancel_at_billing_date,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Request cancellation (sends email to admin)
-app.post("/api/request-cancellation", async (req, res) => {
-  try {
-    const { userId, subscriptionId, email, name } = req.body;
-
-    if (!userId || !subscriptionId) {
-      return res.status(400).json({
-        success: false,
-        error: "User ID and Subscription ID are required",
-      });
-    }
-
-    // Get current user data
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
-
-    if (userError || !user) {
-      return res.status(404).json({
-        success: false,
-        error: "User not found",
-      });
-    }
-
-    // Mark as cancellation requested in database
-    await supabase
-      .from("users")
-      .update({
-        status: "cancellation_requested",
-        updated_at: new Date(),
-      })
-      .eq("user_id", userId);
-
-    // TODO: Send email to admin (you can integrate with SendGrid, Nodemailer, etc.)
-    console.log(`📧 CANCELLATION REQUEST:
-    User: ${name} (${email})
-    User ID: ${userId}
-    Subscription ID: ${subscriptionId}
-    
-    ACTION REQUIRED: Please cancel this subscription in DodoPayments dashboard.`);
-
-    res.json({
-      success: true,
-      message:
-        "Cancellation request submitted. You will receive an email confirmation and keep premium access until your next billing date.",
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Manual sync with DodoPayments (for when webhooks don't fire)
-app.post("/api/sync-subscription/:subscriptionId", async (req, res) => {
-  try {
-    const { subscriptionId } = req.params;
-
-    console.log(`🔄 Manual sync requested for subscription: ${subscriptionId}`);
-
-    // Fetch current status from DodoPayments
+    // Fetch current status from DodoPayments (always return fresh data)
     const response = await fetch(
-      `${DODO_BASE_URL}/subscriptions/${subscriptionId}`,
+      `${DODO_BASE_URL}/subscriptions/${user.subscription_id}`,
       {
         headers: {
           Authorization: `Bearer ${DODO_API_KEY}`,
@@ -261,73 +264,52 @@ app.post("/api/sync-subscription/:subscriptionId", async (req, res) => {
 
     if (!response.ok) {
       return res.status(400).json({
-        success: false,
-        error: "Failed to fetch subscription from DodoPayments",
+        subscription: null,
+        error: "Failed to fetch subscription",
       });
     }
 
     const subscription = await response.json();
-    const customerEmail = subscription.customer?.email;
-    const dodoStatus = subscription.status;
 
-    console.log(`📊 DodoPayments status: ${dodoStatus} for ${customerEmail}`);
+    // Return ORIGINAL DodoPayments response
+    res.json({
+      subscription: subscription,
+      synced: false,
+      message: "Current subscription status",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-    if (!customerEmail) {
+// Manual sync endpoint (for admin use)
+app.post("/api/sync-subscription/:subscriptionId", async (req, res) => {
+  try {
+    const { subscriptionId } = req.params;
+    const { email } = req.body;
+
+    if (!email) {
       return res.status(400).json({
         success: false,
-        error: "No customer email found",
+        error: "Email required for sync",
       });
     }
 
-    // Use same logic as webhook
-    let isPremium = false;
-    let dbStatus = "free";
+    console.log(`🔄 Manual sync requested for: ${subscriptionId}`);
 
-    switch (dodoStatus) {
-      case "active":
-        isPremium = true;
-        dbStatus = "active";
-        break;
-      case "cancelled":
-        const nextBilling = new Date(subscription.next_billing_date);
-        const now = new Date();
-        isPremium = nextBilling > now;
-        dbStatus = isPremium ? "cancelling" : "expired";
-        break;
-      case "expired":
-      case "paused":
-        isPremium = false;
-        dbStatus = "expired";
-        break;
-    }
+    const synced = await syncSubscriptionFromDodo(subscriptionId, email);
 
-    console.log(
-      `🔄 Syncing user: ${customerEmail} -> ${dbStatus} (premium: ${isPremium})`
-    );
-
-    // Update database
-    const { data: updatedUser, error } = await supabase
-      .from("users")
-      .update({
-        subscription_id: subscriptionId,
-        is_premium: isPremium,
-        status: dbStatus,
-        next_billing_date: subscription.next_billing_date,
-        cancel_at_billing_date: dodoStatus === "cancelled",
-        updated_at: new Date(),
-      })
-      .eq("email", customerEmail)
-      .select();
-
-    if (error) {
-      return res.status(500).json({ success: false, error: error.message });
+    if (!synced) {
+      return res.status(400).json({
+        success: false,
+        error: "Failed to sync subscription",
+      });
     }
 
     res.json({
       success: true,
-      message: `Subscription synced: ${dbStatus}`,
-      user: updatedUser[0],
-      dodoPaymentsStatus: dodoStatus,
+      message: `Subscription synced: ${synced.user.status}`,
+      subscription: synced.dodoPaymentsResponse,
     });
   } catch (error) {
     console.error("Sync error:", error);
@@ -335,75 +317,29 @@ app.post("/api/sync-subscription/:subscriptionId", async (req, res) => {
   }
 });
 
-// Simple webhook - just sync DodoPayments status
+// Webhook - auto-sync when you cancel from dashboard
 app.post("/api/webhooks/dodopayments", async (req, res) => {
   try {
     const event = req.body;
 
-    // Enhanced logging for debugging
-    console.log("=== WEBHOOK DEBUG ===");
+    console.log("=== WEBHOOK RECEIVED ===");
     console.log("Event Type:", event.type);
     console.log("Subscription ID:", event.data?.subscription_id);
     console.log("Customer Email:", event.data?.customer?.email);
     console.log("Status:", event.data?.status);
-    console.log(
-      "Cancel at next billing:",
-      event.data?.cancel_at_next_billing_date
-    );
-    console.log("Cancelled at:", event.data?.cancelled_at);
-    console.log("Next billing date:", event.data?.next_billing_date);
-    console.log("Full payload:", JSON.stringify(event, null, 2));
-    console.log("==================");
+    console.log("======================");
 
     const subscriptionId = event.data?.subscription_id;
     const customerEmail = event.data?.customer?.email;
-    const dodoStatus = event.data?.status; // DodoPayments official status
 
     if (!subscriptionId || !customerEmail) {
       return res.status(200).json({ received: true });
     }
 
-    // Simple logic: Use DodoPayments status directly
-    let isPremium = false;
-    let dbStatus = "free";
+    // Sync from DodoPayments
+    await syncSubscriptionFromDodo(subscriptionId, customerEmail);
 
-    switch (dodoStatus) {
-      case "active":
-        isPremium = true;
-        dbStatus = "active";
-        break;
-      case "cancelled":
-        // Check if still in grace period
-        const nextBilling = new Date(event.data.next_billing_date);
-        const now = new Date();
-        isPremium = nextBilling > now;
-        dbStatus = isPremium ? "cancelling" : "expired";
-        break;
-      case "expired":
-      case "paused":
-        isPremium = false;
-        dbStatus = "expired";
-        break;
-    }
-
-    console.log(
-      `Updating user: ${customerEmail} -> ${dbStatus} (premium: ${isPremium})`
-    );
-
-    // Update database with DodoPayments status
-    await supabase
-      .from("users")
-      .update({
-        subscription_id: subscriptionId,
-        is_premium: isPremium,
-        status: dbStatus,
-        next_billing_date: event.data.next_billing_date,
-        cancel_at_billing_date: dodoStatus === "cancelled",
-        updated_at: new Date(),
-      })
-      .eq("email", customerEmail);
-
-    res.status(200).json({ received: true });
+    res.status(200).json({ received: true, synced: true });
   } catch (error) {
     console.error("Webhook error:", error);
     res.status(500).json({ error: error.message });
@@ -430,18 +366,7 @@ app.get("/success", async (req, res) => {
         const customerEmail = subscription.customer?.email;
 
         if (customerEmail) {
-          await supabase
-            .from("users")
-            .update({
-              subscription_id: subscription_id,
-              is_premium: true,
-              status: "active",
-              next_billing_date: subscription.next_billing_date,
-              cancel_at_billing_date: false,
-              updated_at: new Date(),
-            })
-            .eq("email", customerEmail);
-
+          await syncSubscriptionFromDodo(subscription_id, customerEmail);
           console.log("Subscription activated via redirect:", subscription_id);
         }
       }
